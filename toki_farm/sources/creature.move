@@ -83,7 +83,7 @@ public fun get_phenotype(
 // - 각 locus별로 자식 유전자 생성(여기서만 RNG 사용)
 // - 표현형은 결정적으로 계산
 // ─────────────────────────────────────────────────────────────
-entry fun breed(
+public(package) fun breed(
     parent_a: &Toki,
     parent_b: &Toki,
     image_url: Option<String>,
