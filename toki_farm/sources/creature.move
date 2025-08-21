@@ -14,6 +14,7 @@ const MOUTH: u8 = 2;
 // Owned NFT : Toki
 public struct Toki has key, store {
     id: UID,
+    name: Option<String>,
     parent_a: Option<address>,
     parent_b: Option<address>,
     phenotype: Phenotype,
@@ -86,7 +87,6 @@ public fun get_phenotype(
 public(package) fun breed(
     parent_a: &Toki,
     parent_b: &Toki,
-    image_url: Option<String>,
     ctx: &mut TxContext
 ) {
     let sndr = sender(ctx);
@@ -112,11 +112,12 @@ public(package) fun breed(
     // 자식 민팅
     let child = Toki {
         id: object::new(ctx),
+        name: option::none<String>(),
         parent_a: option::some<address>(a_id),
         parent_b: option::some<address>(b_id),
         phenotype: ph,
         genes,
-        image_url
+        image_url: option::none<String>()
     };
 
     transfer::public_transfer(child, sndr);
@@ -129,7 +130,6 @@ entry fun mint_init(
      ear_a1: u8, ear_a2: u8, ear_rule: u8,
     eye_a1: u8, eye_a2: u8, eye_rule: u8,
     mouth_a1: u8, mouth_a2: u8, mouth_rule: u8,
-    image_url: Option<String>,
     ctx: &mut TxContext
 ) {
     let mut genes: Table<u8, GenePair> = table::new<u8, GenePair>(ctx);
@@ -148,14 +148,29 @@ entry fun mint_init(
 
     let toki = Toki {
         id: object::new(ctx),
+        name: option::none<String>(),
         parent_a: option::none<address>(),
         parent_b: option::none<address>(),
         phenotype: ph,
         genes,
-        image_url
+        image_url: option::none<String>()
     };
 
     transfer::public_transfer(toki, sender(ctx));
+}
+
+// ─────────────────────────────────────────────────────────────
+// Details 갱신: 이름, 이미지 URL
+// ─────────────────────────────────────────────────────────────
+public entry fun set_toki_details(
+    toki: &mut Toki,
+    name: String,
+    image_url: String,
+    _ctx: &mut TxContext
+) {
+    // &mut Toki를 인자로 받으므로, ctx.sender()가 소유자임이 강제됨
+    toki.name = option::some(name);
+    toki.image_url = option::some(image_url);
 }
 
 // RNG (MVP용 간단구현)
@@ -179,9 +194,9 @@ entry fun mint_init_noimg(
      mouth_a1: u8, mouth_a2: u8, mouth_rule: u8,
      ctx: &mut TxContext
 ) {
-    mint_init(ear_a1, ear_a2, ear_rule, eye_a1, eye_a2, eye_rule, mouth_a1, mouth_a2, mouth_rule, option::none<String>(), ctx)
+    mint_init(ear_a1, ear_a2, ear_rule, eye_a1, eye_a2, eye_rule, mouth_a1, mouth_a2, mouth_rule, ctx)
 }
 
 entry fun breed_noimg(parent_a: &Toki, parent_b: &Toki, ctx: &mut TxContext) {
-    breed(parent_a, parent_b, option::none<String>(), ctx)
+    breed(parent_a, parent_b, ctx)
 }

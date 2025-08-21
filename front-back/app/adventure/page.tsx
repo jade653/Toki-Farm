@@ -14,7 +14,7 @@ export default function AdventurePage() {
         The dungeon welcomes only those bonded with a Toki
       </h1>
 
-      <div className="mt-[4px] inline-block rounded-2xl bg-purple-600 px-10 py-5 text-2xl font-bold text-white shadow-lg transition hover:bg-purple-700 active:scale-[0.98]">
+      <div className="mt-[4px] inline-block rounded-2xl px-10 py-5 text-2xl font-bold text-white shadow-lg transition-transform active:scale-[0.90] bg-gradient-to-b from-purple-600 to-purple-700 border-b-4 border-purple-800 drop-shadow-[0_2px_0_rgba(0,0,0,0.6)]">
         Here is my Toki
       </div>
     </div>

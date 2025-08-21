@@ -3,7 +3,7 @@ module toki_farm::farm;
 use std::string::{String};
 use std::option::{Self, Option};
 use sui::tx_context::{sender, TxContext};
-use sui::coin::Coin;
+use sui::coin::{Coin};
 use sui::sui::SUI;
 use sui::table::{Self, Table};
 use sui::transfer;
@@ -34,13 +34,10 @@ public struct Listing has key, store {
     nonce: u64,             // breed 횟수
 }
 
-/// ===== Hot Potato (능력 없음): 반드시 소비/반납되어야 함 =====
-/// Toki는 분리된 값으로 들고 다니고, BorrowReq는 검증/강제용 티켓
-public struct BorrowReq {
-    listing_id: ID,         // 어디서 꺼냈는지
-    toki_id: ID,            // 어떤 Toki인지 (스왑 방지)
-    expected_fee: u64,      // borrow 시점의 fee 스냅샷
-    paid: u64,              // 결제 누적액 (처음 0, pay 후 fee로 갱신)
+/// ===== Hot Potato 래퍼 (능력 없음: 반드시 소비/반납되어야 함) =====
+public struct BorrowedToki {
+    listing_id: ID,
+    toki: Toki,
 }
 
 /// 모듈 초기화
@@ -78,17 +75,15 @@ entry fun unlist(
     ctx: &mut TxContext
 ) {
     let me = sender(ctx);
-    let mine = table::borrow(&farm.listings, nft_id);
-    assert!(me == mine.owner, 0);
-    assert!(option::is_some(&mine.nft), 1); // 밖에 나가 있으면 언리스트 불가
+    let l_im = table::borrow(&farm.listings, nft_id);
+    assert!(me == l_im.owner, 0);
+    assert!(option::is_some(&l_im.nft), 1); // 밖에 나가 있으면 언리스트 불가
 
-    let Listing { id, mut nft, owner, fee: _, price: _, gene_info: _, nonce: _ } =
-    table::remove(&mut farm.listings, nft_id);
-
-    let toki = option::extract(&mut nft); // nft Some -> Toki, nft는 None이 됨
-    option::destroy_none(nft);            // 이제 None이 된 Option<Toki>를 소비
-    object::delete(id);                   // listing.id 소비됨 
-    transfer::public_transfer(toki, owner); // toki 소비됨
+    let listing = table::remove(&mut farm.listings, nft_id);
+    let Listing { id, nft, owner, fee: _, price: _, gene_info: _, nonce: _ } = listing;
+    let toki = option::extract(nft); // Some(Toki) -> Toki
+    object::delete(id);
+    transfer::public_transfer(toki, owner);
 }
 
 /// 구매(즉시매매): price가 Some이고, NFT가 Listing 안에 있을 때만 가능
@@ -111,7 +106,7 @@ entry fun buy(
 
     // 2) 수수료 분배
     let platform_fee = price_val * PLATFORM_FEE_PPM / PPM_DENOM;
-    let seller_gets = price_val - platform_fee;
+    let seller_gets  = price_val - platform_fee;
 
     pay::split_and_transfer(&mut pay, platform_fee, TREASURY, ctx);
     pay::split_and_transfer(&mut pay, seller_gets, owner, ctx);
@@ -119,143 +114,100 @@ entry fun buy(
 
     // 3) Listing 제거 → NFT 추출 → 구매자에게 이전
     let listing_obj = table::remove(&mut farm.listings, nft_id);
-    let Listing { id, mut nft, owner: _, fee: _, price: _, gene_info: _, nonce: _ } = listing_obj;
-    let toki = option::extract(&mut nft); // nft Some -> Toki, nft는 None이 됨
-    option::destroy_none(nft);            // 이제 None이 된 Option<Toki>를 소비
+    let Listing { id, nft, owner: _, fee: _, price: _, gene_info: _, nonce: _ } = listing_obj;
+    let toki = option::extract(nft);
     object::delete(id);
     transfer::public_transfer(toki, buyer);
 }
 
-/// ====== Borrow 단계: Toki value + BorrowReq(초기 paid=0) 반환 ======
-public fun borrow_val(
+/// 부모 꺼내기(수수료 정산 + BorrowedToki 발급)
+public fun take_parent(
     listing: &mut Listing,
-    _ctx: &mut TxContext
-): (Toki, BorrowReq) {
+    mut pay: Coin<SUI>,
+    ctx: &mut TxContext
+): BorrowedToki {
     assert!(option::is_some(&listing.nft), 10);
 
-    let toki = option::extract(&mut listing.nft); // 밖으로 꺼냄 → listing.nft = None
-    let req = BorrowReq {
-        listing_id: object::id(listing),
-        toki_id: object::id(&toki),
-        expected_fee: listing.fee,  // 스냅샷
-        paid: 0,
-    };
-    (toki, req)
-}
-
-/// ====== Pay 단계: SUI 전송 + req.paid 갱신 ======
-public fun pay_fee(
-    req: &mut BorrowReq,
-    mut pay: Coin<SUI>,
-    owner: address,
-    ctx: &mut TxContext
-) {
+    // 대여료 정산 (오너는 0)
     let caller = sender(ctx);
-    let fee = if (caller == owner) { 0 } else { req.expected_fee };
-
-    if (fee > 0) {
-        let platform_fee = fee * PLATFORM_FEE_PPM / PPM_DENOM;
-        let owner_gets   = fee - platform_fee;
+    let fee_paid = if (caller == listing.owner) { 0 } else { listing.fee };
+    if (fee_paid > 0) {
+        let platform_fee = fee_paid * PLATFORM_FEE_PPM / PPM_DENOM;
+        let owner_gets   = fee_paid - platform_fee;
         pay::split_and_transfer(&mut pay, platform_fee, TREASURY, ctx);
-        pay::split_and_transfer(&mut pay,owner_gets, owner, ctx);
-    };
-    // pay는 반드시 소비(잔돈 포함)
+        pay::split_and_transfer(&mut pay, owner_gets, listing.owner, ctx);
+    }
+    // pay는 반드시 소비
     transfer::public_transfer(pay, caller);
 
-    // 결제 완료 기록
-    req.paid = fee;
+    // NFT value 추출 → 래퍼에 담아 반환
+    let toki = option::extract(&mut listing.nft);
+    BorrowedToki { listing_id: object::id(listing), toki }
 }
 
-/// ====== Return 단계: 검증 + 원위치 + req 소비 ======
-public fun return_val(
+/// 반드시 반납(consume) — Listing 검증 + nonce++ + 원위치
+public fun return_parent(
     listing: &mut Listing,
-    toki: Toki,
-    req: BorrowReq
+    borrowed: BorrowedToki
 ) {
-    let BorrowReq { listing_id, toki_id, expected_fee, paid } = req; // 여기서 소비
-
-    // 스왑 방지 + 올바른 컨테이너로 반납 확인
+    let BorrowedToki { listing_id, toki } = borrowed; // 여기서 consume
     assert!(object::id(listing) == listing_id, 20);
-    assert!(object::id(&toki)   == toki_id,    21);
-
-    // 결제 확인 (borrow 시점 fee 기준)
-    assert!(paid >= expected_fee, 22);
 
     listing.nonce = listing.nonce + 1;
     option::fill(&mut listing.nft, toki);
 }
 
-/// 두 Listing에서 borrow → pay → breed → return
+/// 두 Listing에서 Hot Potato로 꺼내고 → breed → 반드시 반납
 entry fun pair_from_listings(
     farm: &mut Farm,
     id_a: ID, mut pay_a: Coin<SUI>,
     id_b: ID, mut pay_b: Coin<SUI>,
     ctx: &mut TxContext
 ) {
-    // A borrow (스코프 분리로 &mut 충돌 회피)
-    let (toki_a, mut req_a) = {
+    // A 꺼내기 (스코프 분리로 &mut 충돌 회피)
+    let borrowed_a = {
         let la = table::borrow_mut(&mut farm.listings, id_a);
-        borrow_val(la, ctx)
+        take_parent(la, pay_a, ctx)
     };
 
-    // B borrow
-    let (toki_b, mut req_b) = {
+    // B 꺼내기
+    let borrowed_b = {
         let lb = table::borrow_mut(&mut farm.listings, id_b);
-        borrow_val(lb, ctx)
+        take_parent(lb, pay_b, ctx)
     };
 
-    // A pay (owner는 listing에서 복사해와서 사용)
-    {
-        let la = table::borrow_mut(&mut farm.listings, id_a);
-        let owner_a = la.owner;
-        pay_fee(&mut req_a, pay_a, owner_a, ctx);
-    };
+    // breed는 &Toki만 필요 → 래퍼 안 value에 참조로 접근
+    creature::breed(&borrowed_a.toki, &borrowed_b.toki, std::option::none<String>(), ctx);
 
-    // B pay
-    {
-        let lb = table::borrow_mut(&mut farm.listings, id_b);
-        let owner_b = lb.owner;
-        pay_fee(&mut req_b, pay_b, owner_b, ctx);
-    };
-
-    // breed는 잠깐 &만 잡고 바로 끝
-    creature::breed(&toki_a, &toki_b, ctx);
-
-    // return (각각 별도 블록)
+    // 반드시 반납(consume)
     {
         let la = table::borrow_mut(&mut farm.listings, id_a);
-        return_val(la, toki_a, req_a);
-    };
+        return_parent(la, borrowed_a);
+    }
     {
         let lb = table::borrow_mut(&mut farm.listings, id_b);
-        return_val(lb, toki_b, req_b);
-    };
+        return_parent(lb, borrowed_b);
+    }
 }
 
-/// A=Listing, B=Owned: borrow A → pay A → breed → return A
+/// A=Listing, B=Owned
 entry fun pair_listing_owned(
     farm: &mut Farm,
     id_a: ID, mut pay_a: Coin<SUI>,
     b: &Toki,
     ctx: &mut TxContext
 ) {
-    let (toki_a, mut req_a) = {
+    let borrowed_a = {
         let la = table::borrow_mut(&mut farm.listings, id_a);
-        borrow_val(la, ctx)
+        take_parent(la, pay_a, ctx)
     };
+
+    creature::breed(&borrowed_a.toki, b, std::option::none<String>(), ctx);
 
     {
         let la = table::borrow_mut(&mut farm.listings, id_a);
-        let owner_a = la.owner;
-        pay_fee(&mut req_a, pay_a, owner_a, ctx);
-    };
-
-    creature::breed(&toki_a, b, ctx);
-
-    {
-        let la = table::borrow_mut(&mut farm.listings, id_a);
-        return_val(la, toki_a, req_a);
-    };
+        return_parent(la, borrowed_a);
+    }
 }
 
 /// 둘 다 Owned
@@ -264,5 +216,5 @@ entry fun pair_owned_owned(
     b: &Toki,
     ctx: &mut TxContext
 ) {
-    creature::breed(a, b, ctx);
+    creature::breed(a, b, std::option::none<String>(), ctx);
 }

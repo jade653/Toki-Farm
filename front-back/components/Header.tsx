@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useAppStore } from "@/hooks/useWalletStauts";
 import { useRouter, usePathname } from "next/navigation";
 import { useMemo } from "react";
 import WoodSign from "@/components/WoodSign";
