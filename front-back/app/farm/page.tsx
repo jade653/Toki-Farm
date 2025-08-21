@@ -13,9 +13,12 @@ import TokiCard from "@/components/TokiCard";
 
 type ListingItem = { objectId: string; name: string };
 
-const FARM_ID = process.env.NEXT_PUBLIC_FARM_ID!; // Shared Farm object id
-const PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID!; // 배포 패키지 id
-const PAIR_TARGET = `${PACKAGE_ID}::farm::pair_selected`; // 네 실제 함수로 수정
+const FARM_ID =
+  "0x21e6647695577cbb73dbb5d31e50f1c0a21719be1b9033f3714fc74d5cd2ec5b"; // Shared Farm object id
+const PACKAGE_ID =
+  "0x2c736572e40614b1bd409d344a362eb6d724e77eefc7cc6517873e110c899178"; // 배포 패키지 id
+const PAIR_TARGET =
+  "0x2c736572e40614b1bd409d344a362eb6d724e77eefc7cc6517873e110c899178::farm::pair_selected"; // 네 실제 함수로 수정
 
 export default function FarmPage() {
   const router = useRouter();

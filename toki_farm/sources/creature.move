@@ -7,9 +7,10 @@ use sui::bcs::{Self};
 use sui::hash;
 
 // locus
-const EAR: u8   = 0;
-const EYE: u8   = 1;
-const MOUTH: u8 = 2;
+const BASE: u8  = 0;
+const EAR: u8   = 1;
+const EYE: u8   = 2;
+const MOUTH: u8 = 3;
 
 // Owned NFT : Toki
 public struct Toki has key, store {
@@ -31,6 +32,7 @@ public struct GenePair has copy, drop, store {
 
 // 표현형
 public struct Phenotype has copy, drop, store {
+    base: u8,
     ear: u8,
     eye: u8,
     mouth: u8
@@ -69,13 +71,14 @@ public fun decide_expression(g: &GenePair, sndr: address, salt: u64): u8 {
 
 // rule=1(우열)은 큰 값이 발현, 나머지는 랜덤 선택(간단 규칙)
 public fun get_phenotype(
-    ear: &GenePair, eye: &GenePair, mouth: &GenePair,
+    base: &GenePair, ear: &GenePair, eye: &GenePair, mouth: &GenePair,
     sndr: address, salt: u64
 ): Phenotype {
+    let base_code  = decide_expression(base,  sndr, salt + 10);
     let ear_code   = decide_expression(ear,   sndr, salt + 11);
     let eye_code   = decide_expression(eye,   sndr, salt + 12);
     let mouth_code = decide_expression(mouth, sndr, salt + 13);
-    Phenotype { ear: ear_code, eye: eye_code, mouth: mouth_code }
+    Phenotype { base: base_code, ear: ear_code, eye: eye_code, mouth: mouth_code }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -92,18 +95,20 @@ public(package) fun breed(
     let sndr = sender(ctx);
 
     // 각 좌위별 자식 유전자 생성
+    let base  = child_gene_from_parents(parent_a, parent_b, BASE,  sndr, 0);
     let ear   = child_gene_from_parents(parent_a, parent_b, EAR,   sndr, 1);
     let eye   = child_gene_from_parents(parent_a, parent_b, EYE,   sndr, 2);
     let mouth = child_gene_from_parents(parent_a, parent_b, MOUTH, sndr, 3);
 
     // genes 테이블 구성
     let mut genes: Table<u8, GenePair> = table::new<u8, GenePair>(ctx);
+    table::add(&mut genes, BASE, base);
     table::add(&mut genes, EAR, ear);
     table::add(&mut genes, EYE, eye);
     table::add(&mut genes, MOUTH, mouth);
 
     // 표현형은 결정적 계산
-    let ph = get_phenotype(&ear, &eye, &mouth, sndr, 0);
+    let ph = get_phenotype(&base, &ear, &eye, &mouth, sndr, 0);
 
     // 부모 id 주소
     let a_id = object::id_address(parent_a);
@@ -127,24 +132,23 @@ public(package) fun breed(
 // init minting : 시조 NFT (genes 직접 입력)
 // ─────────────────────────────────────────────────────────────
 entry fun mint_init(
-     ear_a1: u8, ear_a2: u8, ear_rule: u8,
+    base_a1: u8, base_a2: u8, base_rule: u8,
+    ear_a1: u8, ear_a2: u8, ear_rule: u8,
     eye_a1: u8, eye_a2: u8, eye_rule: u8,
     mouth_a1: u8, mouth_a2: u8, mouth_rule: u8,
+    pheno_base: u8, pheno_ear: u8, pheno_eye: u8, pheno_mouth: u8,
     ctx: &mut TxContext
 ) {
     let mut genes: Table<u8, GenePair> = table::new<u8, GenePair>(ctx);
+    table::add(&mut genes, BASE, GenePair { a1: base_a1, a2: base_a2, rule: base_rule });
     table::add(&mut genes, EAR, GenePair { a1: ear_a1, a2: ear_a2, rule: ear_rule });
     table::add(&mut genes, EYE, GenePair { a1: eye_a1, a2: eye_a2, rule: eye_rule });
     table::add(&mut genes, MOUTH, GenePair { a1: mouth_a1, a2: mouth_a2, rule: mouth_rule });
 
-
-    let ph = get_phenotype(
-        table::borrow(&genes, EAR),
-        table::borrow(&genes, EYE),
-        table::borrow(&genes, MOUTH),
-        sender(ctx),
-        0
-    );
+    // 표현형은 인자로 직접 지정 / Phenotype is specified directly as an argument
+    let ph = Phenotype {
+        base: pheno_base, ear: pheno_ear, eye: pheno_eye, mouth: pheno_mouth
+    };
 
     let toki = Toki {
         id: object::new(ctx),
@@ -189,12 +193,14 @@ public fun rng_bit(sndr: address, salt: u64): bool {
 
 // 테스트 편의: 이미지 없이 민트/브리드하는 헬퍼
 entry fun mint_init_noimg(
-     ear_a1: u8, ear_a2: u8, ear_rule: u8,
-     eye_a1: u8, eye_a2: u8, eye_rule: u8,
-     mouth_a1: u8, mouth_a2: u8, mouth_rule: u8,
-     ctx: &mut TxContext
+    base_a1: u8, base_a2: u8, base_rule: u8,
+    ear_a1: u8, ear_a2: u8, ear_rule: u8,
+    eye_a1: u8, eye_a2: u8, eye_rule: u8,
+    mouth_a1: u8, mouth_a2: u8, mouth_rule: u8,
+    pheno_base: u8, pheno_ear: u8, pheno_eye: u8, pheno_mouth: u8,
+    ctx: &mut TxContext
 ) {
-    mint_init(ear_a1, ear_a2, ear_rule, eye_a1, eye_a2, eye_rule, mouth_a1, mouth_a2, mouth_rule, ctx)
+    mint_init(base_a1, base_a2, base_rule, ear_a1, ear_a2, ear_rule, eye_a1, eye_a2, eye_rule, mouth_a1, mouth_a2, mouth_rule, pheno_base, pheno_ear, pheno_eye, pheno_mouth, ctx)
 }
 
 entry fun breed_noimg(parent_a: &Toki, parent_b: &Toki, ctx: &mut TxContext) {

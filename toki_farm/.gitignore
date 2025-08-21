@@ -2,3 +2,4 @@ build/*
 .trace
 .coverage*
 .env
+memo.md
