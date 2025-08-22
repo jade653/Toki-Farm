@@ -21,10 +21,13 @@ type PhenotypeView = {
 };
 
 type ListingItem = {
+  // ✅ 테이블 키로 쓰일 값: 반드시 'Toki Object ID'
   listingId: string;
   name: string;
   imageUrl?: string | null;
   phenotype?: PhenotypeView | null;
+  // ✅ u64 수수료 (JSON에선 보통 string으로 옴)
+  fee?: string;
 };
 
 function TokiPreview({
@@ -118,7 +121,7 @@ export default function FarmPage() {
   const [error, setError] = useState<string | null>(null);
 
   const canPair = useMemo(
-    () => account && selected.length === 2,
+    () => !!account && selected.length === 2,
     [account, selected.length]
   );
 
@@ -145,13 +148,13 @@ export default function FarmPage() {
         }
         const listingsTableId =
           farmObject.data.content.fields.listings.fields.id.id;
+
         // 2) 'listings' 테이블에서 Dynamic field 목록을 가져옵니다.
         const fieldsPage = await client.getDynamicFields({
           parentId: listingsTableId,
         });
-        console.log("Dynamic fields:", fieldsPage.data);
 
-        // 3) Dynamic Field 객체들의 ID 목록을 만듭니다.
+        // 3) Dynamic Field 객체들의 ID 목록
         const dynamicFieldObjectIds = fieldsPage.data.map(
           (field) => field.objectId
         );
@@ -162,14 +165,13 @@ export default function FarmPage() {
           return;
         }
 
-        // 4) 각 ID로 Dynamic Field 객체('Field<ID, Listing>')를 가져옵니다.
-        // multiGetObjects를 사용하면 한번의 요청으로 모두 가져올 수 있어 더 효율적입니다.
+        // 4) Field<ID, Listing> 객체들을 일괄 조회
         const fieldObjects = await client.multiGetObjects({
           ids: dynamicFieldObjectIds,
           options: { showContent: true },
         });
 
-        // 5) 가져온 객체들의 내용을 파싱하여 화면에 표시할 데이터로 변환합니다.
+        // 5) 화면 표시용으로 변환
         const parsedListings = fieldObjects.map((fieldObjectResponse) => {
           const fieldObject = fieldObjectResponse.data;
 
@@ -185,20 +187,18 @@ export default function FarmPage() {
             return null;
           }
 
-          // Field<ID, Listing> 객체는 'name'(키)과 'value'(값) 필드를 가집니다.
+          // Field<ID, Listing> => { name, value }
           const dynamicField = fieldObject.content.fields as any;
-          const listingStruct = dynamicField.value.fields; // 'value'가 실제 Listing 구조체입니다.
+          const listingStruct = dynamicField.value.fields; // 실제 Listing
 
-          // Listing 객체 자체의 ID로, 선택 및 페어링에 사용됩니다.
-          const listingId = listingStruct.id.id;
+          // Listing.nft 가 Some(Toki)인 것만 노출
+          const nftOpt = listingStruct.nft;
+          const tokiFields = nftOpt?.fields;
+          if (!tokiFields) return null; // None 이면 제외
 
-          // Listing 구조체 안의 'nft' 필드가 Toki 객체입니다.
-          const tokiFields = listingStruct.nft.fields;
-          if (!tokiFields) {
-            return null;
-          }
+          // ✅ 테이블 키 = Toki Object ID (register에서 object::id(&nft)로 키를 넣었음)
+          const tokiId: string = tokiFields.id.id;
 
-          // Toki 객체 안의 'phenotype' 필드를 사용합니다.
           const phenotypeFields = tokiFields.phenotype?.fields;
           const phenotype: PhenotypeView | null = phenotypeFields
             ? {
@@ -209,11 +209,19 @@ export default function FarmPage() {
               }
             : null;
 
+          // u64 fee → JSON에선 보통 string
+          const fee: string | undefined =
+            typeof listingStruct.fee === "string"
+              ? listingStruct.fee
+              : listingStruct.fee?.toString?.();
+
           return {
-            listingId: listingId,
-            name: tokiFields.name ?? `Toki #${tokiFields.id.id.slice(0, 6)}`,
+            // ✅ 반드시 Toki ID 를 써서 선택/호출에 사용
+            listingId: tokiId,
+            name: tokiFields.name ?? `Toki #${tokiId.slice(0, 6)}`,
             imageUrl: tokiFields.image_url ?? null,
-            phenotype: phenotype,
+            phenotype,
+            fee,
           } as ListingItem;
         });
 
@@ -246,30 +254,54 @@ export default function FarmPage() {
     });
   };
 
-  // ▶️ 트랜잭션 템플릿: 네 Move 함수에 맞게 target/arguments만 수정
+  // ▶️ pair_from_listings 호출 전용
   const handlePair = async () => {
     if (!canPair || !packageId || !farmId) return;
 
     try {
-      setMsg(null);
-      // 선택한 두 listing
-      const [a, b] = selected;
+      setError(null);
+      setMsg("Pairing…");
+
+      // ✅ selected[*] 는 반드시 'Toki ID'(테이블 키)
+      const [idA, idB] = selected;
+      if (idA === idB) {
+        throw new Error("Please select two different Tokis.");
+      }
+
+      // 선택된 항목의 fee (MIST, u64). 모르면 1 MIST로 최소 처리.
+      const itemA = listings.find((l) => l.listingId === idA);
+      const itemB = listings.find((l) => l.listingId === idB);
+      const feeA = BigInt(itemA?.fee ?? "1");
+      const feeB = BigInt(itemB?.fee ?? "1");
 
       const tx = new Transaction();
 
-      // 예시) shared Farm + 두 listing 오브젝트를 전달
-      //  - shared는 tx.object(FARM_ID)
-      //  - listing은 보통 owned/shared object 참조: tx.object(listingId)
-      //  - 실제 함수 시그니처(coin, fee, type args 등)에 맞게 수정 필요
+      // pay_a, pay_b 로 쓸 코인 두 개 생성 (가스에서 분할, 단위=MIST)
+      const [payA, payB] = tx.splitCoins(tx.gas, [
+        tx.pure.u64(feeA),
+        tx.pure.u64(feeB),
+      ]);
+
+      // farm::pair_from_listings(
+      //   &mut Farm, id_a: ID, pay_a: Coin<SUI>, id_b: ID, pay_b: Coin<SUI>, &mut TxContext
+      // )
       tx.moveCall({
-        target: `${packageId}::farm::pair_selected`,
-        arguments: [tx.object(farmId), tx.object(a), tx.object(b)],
+        target: `${packageId}::farm::pair_from_listings`,
+        arguments: [
+          tx.object(farmId), // &mut Farm (shared)
+          tx.pure.id(idA), // Toki ID (테이블 키)
+          payA, // Coin<SUI>
+          tx.pure.id(idB), // Toki ID (테이블 키)
+          payB, // Coin<SUI>
+        ],
       });
 
-      const res = await signAndExecute({ transaction: tx });
-      setMsg(`Pair success! digest: ${res.digest}`);
+      await signAndExecute({
+        transaction: tx,
+      });
 
-      // 성공 후 내 페이지로 이동 (필요 시 약간의 delay)
+      setMsg("Paired! Check your wallet activity / events.");
+      setSelected([]);
       setTimeout(() => router.push("/my"), 700);
     } catch (e: any) {
       setMsg(null);
@@ -353,8 +385,7 @@ export default function FarmPage() {
       ) : (
         <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
           <p className="text-gray-700">
-            No Tokis found in the farm. Register your Toki on the 'My Tokis'
-            page!
+            No Tokis found in the farm. Register your Toki
           </p>
         </div>
       )}
