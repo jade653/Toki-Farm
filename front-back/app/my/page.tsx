@@ -7,6 +7,7 @@ import {
   useCurrentAccount,
   useSuiClientQuery,
   useSignAndExecuteTransaction,
+  useSuiClient,
 } from "@mysten/dapp-kit";
 import { Transaction } from "@mysten/sui/transactions";
 import { useQueryClient } from "@tanstack/react-query";
@@ -41,6 +42,13 @@ type TokiView = {
   parentA: string | null;
   parentB: string | null;
   phenotype: PhenotypeView;
+};
+
+type GeneRow = {
+  locus: number;
+  a1: number;
+  a2: number;
+  rule: number;
 };
 
 // ============== 이미지 ==============
@@ -157,68 +165,16 @@ function TokiDetailModal({
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
   const queryClient = useQueryClient();
   const router = useRouter();
+  const client = useSuiClient(); // ✅ genes 조회용 클라이언트
 
   const [price, setPrice] = useState("");
   const [fee, setFee] = useState(""); // SUI 단위로 입력받음
   const [isRegistering, setIsRegistering] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleRegister = async () => {
-    const priceValue = price.trim();
-    const feeValue = fee.trim();
-
-    if (priceValue && (isNaN(Number(priceValue)) || Number(priceValue) <= 0)) {
-      setError("If provided, price must be a valid positive number (in SUI).");
-      return;
-    }
-    if (!feeValue || isNaN(Number(feeValue)) || Number(feeValue) < 0) {
-      setError("Please enter a valid, non-negative fee (in SUI).");
-      return;
-    }
-
-    setIsRegistering(true);
-    setError(null);
-
-    try {
-      const tx = new Transaction();
-      const priceInMist = priceValue ? suiToMist(priceValue) : null;
-      const feeInMist = suiToMist(feeValue);
-      const geneInfo = JSON.stringify(toki.phenotype ?? {});
-
-      // farm::register(
-      //  &mut Farm, Toki, u64 fee, Option<u64> price, String, &mut TxContext
-      // )
-      tx.moveCall({
-        target: `${PACKAGE_ID}::farm::register`,
-        arguments: [
-          tx.object(FARM_ID), // &mut Farm (shared object)
-          tx.object(toki.id), // Toki (owned)
-          tx.pure.u64(feeInMist), // u64 (MIST)
-          tx.pure.option("u64", priceInMist), // Option<u64> (MIST)
-          tx.pure.string(geneInfo), // String
-        ],
-      });
-
-      const result = await signAndExecute({
-        transaction: tx,
-      });
-
-      console.log("Registration successful:", result);
-      // 소유 토큰/팜 목록 갱신
-      await queryClient.invalidateQueries({
-        queryKey: ["suiClient", "getOwnedObjects"],
-      });
-      await queryClient.invalidateQueries({
-        queryKey: ["suiClient", "getDynamicFields"],
-      });
-      onClose();
-      router.push("/farm");
-    } catch (e: any) {
-      setError(e?.message || "Registration failed.");
-    } finally {
-      setIsRegistering(false);
-    }
-  };
+  // ✅ Genes 상태
+  const [genes, setGenes] = useState<GeneRow[]>([]);
+  const [loadingGenes, setLoadingGenes] = useState(false);
 
   // 숫자 표현형 -> 이름
   const resolvedPhenotype = useMemo(() => {
@@ -242,26 +198,166 @@ function TokiDetailModal({
     };
   }, [toki.phenotype]);
 
+  // ✅ Genes 로딩 (Toki object에서 genes Table<u8, GenePair> 찾아서 전개)
+  useEffect(() => {
+    let aborted = false;
+
+    async function loadGenes() {
+      try {
+        setLoadingGenes(true);
+        setGenes([]);
+
+        // Toki 자체를 읽어 genes 테이블 ID 조회
+        const obj = await client.getObject({
+          id: toki.id,
+          options: { showContent: true },
+        });
+
+        const genesTableId = (obj.data as any)?.content?.fields?.genes?.fields
+          ?.id?.id;
+        if (!genesTableId) {
+          if (!aborted) setGenes([]);
+          return;
+        }
+
+        // genes 테이블의 dynamic fields 나열
+        const df = await client.getDynamicFields({ parentId: genesTableId });
+        if (df.data.length === 0) {
+          if (!aborted) setGenes([]);
+          return;
+        }
+
+        const ids = df.data.map((d) => d.objectId);
+        const items = await client.multiGetObjects({
+          ids,
+          options: { showContent: true },
+        });
+
+        const rows: GeneRow[] = items
+          .map((resp) => {
+            const fo = (resp.data as any)?.content?.fields;
+            if (!fo) return null;
+
+            // key (locus)
+            const keyRaw =
+              fo.name?.fields?.value ??
+              fo.name?.value ??
+              fo.name ??
+              fo.key?.fields?.value ??
+              fo.key?.value ??
+              fo.key;
+            const locus = Number(keyRaw ?? 0);
+
+            // value = GenePair { a1, a2, rule }
+            const val = fo.value?.fields ?? fo.value ?? null;
+            if (!val) return null;
+
+            const a1 = Number(val.a1 ?? 0);
+            const a2 = Number(val.a2 ?? 0);
+            const rule = Number(val.rule ?? 0);
+
+            return { locus, a1, a2, rule } as GeneRow;
+          })
+          .filter(Boolean) as GeneRow[];
+
+        if (!aborted) setGenes(rows);
+      } catch (e) {
+        console.error("Failed to load genes:", e);
+        if (!aborted) setGenes([]);
+      } finally {
+        if (!aborted) setLoadingGenes(false);
+      }
+    }
+
+    loadGenes();
+    return () => {
+      aborted = true;
+    };
+  }, [client, toki.id]);
+
+  const handleRegister = async () => {
+    const priceValue = price.trim();
+    const feeValue = fee.trim();
+
+    if (priceValue && (isNaN(Number(priceValue)) || Number(priceValue) <= 0)) {
+      setError("If provided, price must be a valid positive number (in SUI).");
+      return;
+    }
+    if (!feeValue || isNaN(Number(feeValue)) || Number(feeValue) < 0) {
+      setError("Please enter a valid, non-negative fee (in SUI).");
+      return;
+    }
+
+    setIsRegistering(true);
+    setError(null);
+
+    try {
+      const tx = new Transaction();
+      const priceInMist = priceValue ? suiToMist(priceValue) : null;
+      const feeInMist = suiToMist(feeValue);
+      const geneInfo = JSON.stringify(toki.phenotype ?? {});
+
+      // farm::register(&mut Farm, Toki, u64 fee, Option<u64> price, String, &mut TxContext)
+      tx.moveCall({
+        target: `${PACKAGE_ID}::farm::register`,
+        arguments: [
+          tx.object(FARM_ID),
+          tx.object(toki.id),
+          tx.pure.u64(feeInMist),
+          tx.pure.option("u64", priceInMist),
+          tx.pure.string(geneInfo),
+        ],
+      });
+
+      await signAndExecute({ transaction: tx });
+
+      await queryClient.invalidateQueries({
+        queryKey: ["suiClient", "getOwnedObjects"],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["suiClient", "getDynamicFields"],
+      });
+      onClose();
+      router.push("/farm");
+    } catch (e: any) {
+      setError(e?.message || "Registration failed.");
+    } finally {
+      setIsRegistering(false);
+    }
+  };
+
+  // locus → 파츠명 매핑 및 표시용 도우미
+  const locusMap: (keyof typeof PARTS_CATALOG)[] = [
+    "base",
+    "ears",
+    "eyes",
+    "mouth",
+  ];
+  const getAlleleName = (part: keyof typeof PARTS_CATALOG, index: number) => {
+    const fileName = PARTS_CATALOG[part]?.[index] ?? "N/A";
+    return fileName.replace(`${part}_`, "").replace(".png", "");
+  };
+
   return (
     <div
       className="fixed inset-0 z-20 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-lg"
+        className="w-full max-w-md rounded-2xl bg-white p-6 shadow-lg max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="aspect-square w-full">
+        <div className="mx-auto aspect-square w-full max-w-[300px]">
           {toki.imageUrl ? (
             <Image
               src={toki.imageUrl}
               alt={toki.id}
-              width={320}
-              height={320}
+              width={280}
+              height={280}
               className="h-auto w-full rounded-lg object-contain"
             />
           ) : (
-            <TokiPreview phenotype={toki.phenotype} size={320} />
+            <TokiPreview phenotype={toki.phenotype} size={280} />
           )}
         </div>
 
@@ -301,8 +397,61 @@ function TokiDetailModal({
             </div>
           </div>
 
+          {/* ✅ Genes Table (farm/page.tsx 스타일) */}
+          <div className="mt-2">
+            <div className="mb-2 flex items-center justify-between">
+              <div className="text-sm font-semibold text-emerald-900">
+                Genes
+              </div>
+              {loadingGenes && (
+                <div className="text-xs text-gray-600">Loading genes…</div>
+              )}
+            </div>
+            <div className="overflow-hidden rounded-lg border">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-emerald-50 text-emerald-900">
+                  <tr>
+                    <th className="px-3 py-2">Locus</th>
+                    <th className="px-3 py-2">A1</th>
+                    <th className="px-3 py-2">A2</th>
+                    <th className="px-3 py-2">Rule</th>
+                  </tr>
+                </thead>
+                <tbody className="text-gray-900">
+                  {genes.length === 0 ? (
+                    <tr>
+                      <td className="px-3 py-3 text-gray-600" colSpan={4}>
+                        {loadingGenes ? "—" : "No genes found"}
+                      </td>
+                    </tr>
+                  ) : (
+                    genes
+                      .sort((a, b) => a.locus - b.locus)
+                      .map((g) => {
+                        const partName = locusMap[g.locus];
+                        return (
+                          <tr key={g.locus} className="even:bg-gray-50">
+                            <td className="px-3 py-2 capitalize">{partName}</td>
+                            <td className="px-3 py-2 capitalize">
+                              {getAlleleName(partName, g.a1)}
+                            </td>
+                            <td className="px-3 py-2 capitalize">
+                              {getAlleleName(partName, g.a2)}
+                            </td>
+                            <td className="px-3 py-2">
+                              {g.rule === 0 ? "Random" : "Dominant"}
+                            </td>
+                          </tr>
+                        );
+                      })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
           {/* 등록 폼 */}
-          <div className="mt-4 border-t pt-4">
+          <div className="mt-6 border-t pt-4">
             <h4 className="mb-2 text-2xl font-semibold text-gray-800">
               Register for Sale
             </h4>
