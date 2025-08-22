@@ -10,6 +10,7 @@ import {
 } from "@mysten/dapp-kit";
 import { Transaction } from "@mysten/sui/transactions";
 import { useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { renderTokiPngDataURLFromU8, PARTS_CATALOG } from "@/utils/renderToki";
 
@@ -155,6 +156,7 @@ function TokiDetailModal({
 }) {
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
   const queryClient = useQueryClient();
+  const router = useRouter();
 
   const [price, setPrice] = useState("");
   const [fee, setFee] = useState(""); // SUI 단위로 입력받음
@@ -199,14 +201,18 @@ function TokiDetailModal({
 
       const result = await signAndExecute({
         transaction: tx,
-        options: { showEffects: true, showEvents: true },
       });
 
       console.log("Registration successful:", result);
       // 소유 토큰/팜 목록 갱신
-      await queryClient.invalidateQueries({ queryKey: ["getOwnedObjects"] });
-      await queryClient.invalidateQueries({ queryKey: ["getDynamicFields"] });
+      await queryClient.invalidateQueries({
+        queryKey: ["suiClient", "getOwnedObjects"],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["suiClient", "getDynamicFields"],
+      });
       onClose();
+      router.push("/farm");
     } catch (e: any) {
       setError(e?.message || "Registration failed.");
     } finally {
@@ -375,6 +381,7 @@ function TokiDetailModal({
 export default function MyPage() {
   const account = useCurrentAccount();
   const [selectedToki, setSelectedToki] = useState<TokiView | null>(null);
+  const queryClient = useQueryClient();
 
   // 내 지갑의 Toki들 조회
   const { data, isLoading, isError } = useSuiClientQuery(
