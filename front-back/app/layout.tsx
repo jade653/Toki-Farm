@@ -8,9 +8,6 @@ import PrefetchMyNFTs from "@/components/PrefetchMyNFTs";
 export const metadata: Metadata = {
   title: "Toki Farm",
   description: "Pair and explore Toki on Sui.",
-  icons: {
-    icon: "/favicon.png",
-  },
 };
 
 export default function RootLayout({

@@ -13,3 +13,4 @@ sui client call --package 0x2c736572e40614b1bd409d344a362eb6d724e77eefc7cc651787
 
 sui client call --package 0x2c736572e40614b1bd409d344a362eb6d724e77eefc7cc6517873e110c899178 --module creature --function mint_init --args 0 1 0  1 0 1  0 1 0  2 0 0  0 1 0 0 --gas-budget 100000000
 
+sui client call --package 0x2c736572e40614b1bd409d344a362eb6d724e77eefc7cc6517873e110c899178 --module creature --function 0x4697d6be20ff23961a91ab77581f6e6ce7c0b49a37bc010705d3a9da270844c5

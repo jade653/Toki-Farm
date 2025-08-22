@@ -14,6 +14,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { renderTokiPngDataURLFromU8, PARTS_CATALOG } from "@/utils/renderToki";
+import { useTxRefetch } from "@/hooks/useTxRefetch";
 
 // ===== .env =====
 // NEXT_PUBLIC_PACKAGE_ID=0x...
@@ -53,7 +54,7 @@ type GeneRow = {
 
 // ============== 이미지 ==============
 function TokiImage({ toki, size = 320 }: { toki: TokiView; size?: number }) {
-  if (toki.imageUrl) {
+  if (toki.imageUrl && !toki.imageUrl.startsWith("https://")) {
     return (
       <Image
         src={toki.imageUrl}
@@ -274,7 +275,7 @@ function TokiDetailModal({
       aborted = true;
     };
   }, [client, toki.id]);
-
+  const { executeTx } = useTxRefetch();
   const handleRegister = async () => {
     const priceValue = price.trim();
     const feeValue = fee.trim();
@@ -292,31 +293,34 @@ function TokiDetailModal({
     setError(null);
 
     try {
-      const tx = new Transaction();
       const priceInMist = priceValue ? suiToMist(priceValue) : null;
       const feeInMist = suiToMist(feeValue);
       const geneInfo = JSON.stringify(toki.phenotype ?? {});
 
-      // farm::register(&mut Farm, Toki, u64 fee, Option<u64> price, String, &mut TxContext)
-      tx.moveCall({
-        target: `${PACKAGE_ID}::farm::register`,
-        arguments: [
-          tx.object(FARM_ID),
-          tx.object(toki.id),
-          tx.pure.u64(feeInMist),
-          tx.pure.option("u64", priceInMist),
-          tx.pure.string(geneInfo),
-        ],
-      });
+      await executeTx(
+        async (tx) => {
+          tx.moveCall({
+            target: `${PACKAGE_ID}::farm::register`,
+            arguments: [
+              tx.object(FARM_ID),
+              tx.object(toki.id),
+              tx.pure.u64(feeInMist),
+              tx.pure.option("u64", priceInMist),
+              tx.pure.string(geneInfo),
+            ],
+          });
+        },
+        {
+          // 전역적으로 모든 suiClient 쿼리 invalidate (기본 true)
+          invalidateAllSuiClientQueries: true,
+          // 혹시 특정 쿼리만 확실히 재조회하고 싶다면 추가
+          extraInvalidateKeys: [
+            { queryKey: ["suiClient", "getOwnedObjects"] },
+            // { queryKey: ["suiClient", "getDynamicFields", { parentId: "..." }] },
+          ],
+        }
+      );
 
-      await signAndExecute({ transaction: tx });
-
-      await queryClient.invalidateQueries({
-        queryKey: ["suiClient", "getOwnedObjects"],
-      });
-      await queryClient.invalidateQueries({
-        queryKey: ["suiClient", "getDynamicFields"],
-      });
       onClose();
       router.push("/farm");
     } catch (e: any) {
@@ -348,7 +352,7 @@ function TokiDetailModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mx-auto aspect-square w-full max-w-[300px]">
-          {toki.imageUrl ? (
+          {toki.imageUrl && !toki.imageUrl.startsWith("https://") ? (
             <Image
               src={toki.imageUrl}
               alt={toki.id}
@@ -530,10 +534,9 @@ function TokiDetailModal({
 export default function MyPage() {
   const account = useCurrentAccount();
   const [selectedToki, setSelectedToki] = useState<TokiView | null>(null);
-  const queryClient = useQueryClient();
 
   // 내 지갑의 Toki들 조회
-  const { data, isLoading, isError } = useSuiClientQuery(
+  const { data, isLoading, isError, refetch } = useSuiClientQuery(
     "getOwnedObjects",
     {
       owner: account?.address,
@@ -545,6 +548,7 @@ export default function MyPage() {
       staleTime: 1000 * 60 * 5,
       gcTime: 1000 * 60 * 30,
       refetchOnWindowFocus: false,
+      refetchOnMount: "always",
     }
   );
 

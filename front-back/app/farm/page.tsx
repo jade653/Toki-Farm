@@ -134,7 +134,7 @@ function TokiImage({
   toki: { imageUrl?: string | null; phenotype?: PhenotypeView | null };
   size: number;
 }) {
-  if (toki.imageUrl) {
+  if (toki.imageUrl && !toki.imageUrl.startsWith("https://")) {
     return (
       <Image
         src={toki.imageUrl}
@@ -765,171 +765,176 @@ export default function FarmPage() {
         </button>
       </div>
 
-      {!account && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          <div className="mb-2 font-medium">Wallet not connected</div>
-          <p>Connect your wallet to create a Toki.</p>
-          <div className="mt-3">
-            <ConnectButton />
-          </div>
-        </div>
-      )}
-
-      {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-800">
-          {error}
-        </div>
-      )}
-
-      {msg && (
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-emerald-900">
-          {msg}
-        </div>
-      )}
-
-      {loading ? (
-        <p className="text-gray-600">Loading farm…</p>
-      ) : listings.length > 0 ? (
-        <>
-          {/* 좌/우 2단 레이아웃 */}
-          <div className="grid gap-8 md:grid-cols-2">
-            {/* 왼쪽: 내가 등록한 NFT */}
-            <div>
-              <h3 className="mb-3 text-lg font-semibold text-emerald-800">
-                My Listings
-              </h3>
-              {myListings.length === 0 ? (
-                <div className="rounded-lg border border-dashed p-6 text-sm text-gray-500">
-                  You have no listings here.
-                </div>
-              ) : (
-                <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-                  {myListings.map((item) => {
-                    const fields = item.tokiFields;
-                    const parentA =
-                      fields?.parent_a ??
-                      (fields?.parent_a?.fields?.vec?.length
-                        ? fields.parent_a.fields.vec[0]
-                        : null) ??
-                      "None";
-                    const parentB =
-                      fields?.parent_b ??
-                      (fields?.parent_b?.fields?.vec?.length
-                        ? fields.parent_b.fields.vec[0]
-                        : null) ??
-                      "None";
-                    const isAncestor = parentA === "None" && parentB === "None";
-
-                    return (
-                      <li key={item.listingId}>
-                        <button
-                          type="button"
-                          onClick={() => handleCardClick(item)}
-                          className={`group w-full cursor-pointer rounded-2xl border p-2 text-center shadow-sm transition ${
-                            selectMode && selected.includes(item.listingId)
-                              ? "border-emerald-600 ring-4 ring-emerald-200"
-                              : "border-amber-200 hover:border-amber-300"
-                          }`}
-                        >
-                          <div className="transition group-hover:drop-shadow-lg">
-                            <TokiImage toki={item} size={320} />
-                          </div>
-                          <div className="mt-2 font-semibold text-emerald-900">
-                            {item.name}
-                          </div>
-                          {isAncestor && (
-                            <div className="text-xs font-semibold text-gray-600">
-                              Ancestor
-                            </div>
-                          )}
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-
-            {/* 오른쪽: 다른 사람 NFT */}
-            <div>
-              <h3 className="mb-3 text-lg font-semibold text-emerald-800">
-                Others
-              </h3>
-              {otherListings.length === 0 ? (
-                <div className="rounded-lg border border-dashed p-6 text-sm text-gray-500">
-                  No other listings yet.
-                </div>
-              ) : (
-                <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-                  {otherListings.map((item) => {
-                    const fields = item.tokiFields;
-                    const parentA =
-                      fields?.parent_a ??
-                      (fields?.parent_a?.fields?.vec?.length
-                        ? fields.parent_a.fields.vec[0]
-                        : null) ??
-                      "None";
-                    const parentB =
-                      fields?.parent_b ??
-                      (fields?.parent_b?.fields?.vec?.length
-                        ? fields.parent_b.fields.vec[0]
-                        : null) ??
-                      "None";
-                    const isAncestor = parentA === "None" && parentB === "None";
-
-                    return (
-                      <li key={item.listingId}>
-                        <button
-                          type="button"
-                          onClick={() => handleCardClick(item)}
-                          className={`group w-full cursor-pointer rounded-2xl border p-2 text-center shadow-sm transition ${
-                            selectMode && selected.includes(item.listingId)
-                              ? "border-emerald-600 ring-4 ring-emerald-200"
-                              : "border-amber-200 hover:border-amber-300"
-                          }`}
-                        >
-                          <div className="transition group-hover:drop-shadow-lg">
-                            <TokiImage toki={item} size={320} />
-                          </div>
-                          <div className="mt-2 font-semibold text-emerald-900">
-                            {item.name}
-                          </div>
-                          {isAncestor && (
-                            <div className="text-xs font-semibold text-gray-600">
-                              Ancestor
-                            </div>
-                          )}
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
+      {/* Content Area with background */}
+      <div className="space-y-6 rounded-2xl bg-white/70 p-6 backdrop-blur-sm">
+        {!account && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            <div className="mb-2 font-medium">Wallet not connected</div>
+            <p>Connect your wallet to create a Toki.</p>
+            <div className="mt-3">
+              <ConnectButton />
             </div>
           </div>
+        )}
 
-          <p className="mt-4 text-sm text-gray-600">
-            {selectMode ? (
-              <>
-                Select <span className="font-semibold">two</span> ancestors,
-                then press <span className="font-semibold">Pair Tokis</span>.
-              </>
-            ) : (
-              <>
-                Click a card to view details. Press{" "}
-                <span className="font-semibold">Pair Tokis</span> to start
-                selecting.
-              </>
-            )}
-          </p>
-        </>
-      ) : (
-        <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
-          <p className="text-gray-700">
-            No Tokis found in the farm. Register your Toki
-          </p>
-        </div>
-      )}
+        {error && (
+          <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-800">
+            {error}
+          </div>
+        )}
+
+        {msg && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-emerald-900">
+            {msg}
+          </div>
+        )}
+
+        {loading ? (
+          <p className="text-gray-600">Loading farm…</p>
+        ) : listings.length > 0 ? (
+          <div className="space-y-6">
+            {/* 좌/우 2단 레이아웃 */}
+            <div className="grid gap-8 md:grid-cols-2">
+              {/* 왼쪽: 내가 등록한 NFT */}
+              <div>
+                <h3 className="mb-3 text-lg font-semibold text-emerald-800">
+                  My Listings
+                </h3>
+                {myListings.length === 0 ? (
+                  <div className="rounded-lg border border-dashed p-6 text-sm text-gray-500">
+                    You have no listings here.
+                  </div>
+                ) : (
+                  <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+                    {myListings.map((item) => {
+                      const fields = item.tokiFields;
+                      const parentA =
+                        fields?.parent_a ??
+                        (fields?.parent_a?.fields?.vec?.length
+                          ? fields.parent_a.fields.vec[0]
+                          : null) ??
+                        "None";
+                      const parentB =
+                        fields?.parent_b ??
+                        (fields?.parent_b?.fields?.vec?.length
+                          ? fields.parent_b.fields.vec[0]
+                          : null) ??
+                        "None";
+                      const isAncestor =
+                        parentA === "None" && parentB === "None";
+
+                      return (
+                        <li key={item.listingId}>
+                          <button
+                            type="button"
+                            onClick={() => handleCardClick(item)}
+                            className={`group w-full cursor-pointer rounded-2xl border bg-white/50 p-2 text-center shadow-sm transition ${
+                              selectMode && selected.includes(item.listingId)
+                                ? "border-emerald-600 ring-4 ring-emerald-200"
+                                : "border-amber-200 hover:border-amber-300"
+                            }`}
+                          >
+                            <div className="transition group-hover:drop-shadow-lg">
+                              <TokiImage toki={item} size={320} />
+                            </div>
+                            <div className="mt-2 font-semibold text-emerald-900">
+                              {item.name}
+                            </div>
+                            {isAncestor && (
+                              <div className="text-xs font-semibold text-gray-600">
+                                Ancestor
+                              </div>
+                            )}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+
+              {/* 오른쪽: 다른 사람 NFT */}
+              <div>
+                <h3 className="mb-3 text-lg font-semibold text-emerald-800">
+                  Others
+                </h3>
+                {otherListings.length === 0 ? (
+                  <div className="rounded-lg border border-dashed p-6 text-sm text-gray-500">
+                    No other listings yet.
+                  </div>
+                ) : (
+                  <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+                    {otherListings.map((item) => {
+                      const fields = item.tokiFields;
+                      const parentA =
+                        fields?.parent_a ??
+                        (fields?.parent_a?.fields?.vec?.length
+                          ? fields.parent_a.fields.vec[0]
+                          : null) ??
+                        "None";
+                      const parentB =
+                        fields?.parent_b ??
+                        (fields?.parent_b?.fields?.vec?.length
+                          ? fields.parent_b.fields.vec[0]
+                          : null) ??
+                        "None";
+                      const isAncestor =
+                        parentA === "None" && parentB === "None";
+
+                      return (
+                        <li key={item.listingId}>
+                          <button
+                            type="button"
+                            onClick={() => handleCardClick(item)}
+                            className={`group w-full cursor-pointer rounded-2xl border bg-white/50 p-2 text-center shadow-sm transition ${
+                              selectMode && selected.includes(item.listingId)
+                                ? "border-emerald-600 ring-4 ring-emerald-200"
+                                : "border-amber-200 hover:border-amber-300"
+                            }`}
+                          >
+                            <div className="transition group-hover:drop-shadow-lg">
+                              <TokiImage toki={item} size={320} />
+                            </div>
+                            <div className="mt-2 font-semibold text-emerald-900">
+                              {item.name}
+                            </div>
+                            {isAncestor && (
+                              <div className="text-xs font-semibold text-gray-600">
+                                Ancestor
+                              </div>
+                            )}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            </div>
+
+            <p className="text-sm text-gray-600">
+              {selectMode ? (
+                <>
+                  Select <span className="font-semibold">two</span> ancestors,
+                  then press <span className="font-semibold">Pair Tokis</span>.
+                </>
+              ) : (
+                <>
+                  Click a card to view details. Press{" "}
+                  <span className="font-semibold">Pair Tokis</span> to start
+                  selecting.
+                </>
+              )}
+            </p>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
+            <p className="text-gray-700">
+              No Tokis found in the farm. Register your Toki
+            </p>
+          </div>
+        )}
+      </div>
 
       {/* 모달 */}
       <TokiModal
