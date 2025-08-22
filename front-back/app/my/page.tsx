@@ -6,14 +6,21 @@ import {
   ConnectButton,
   useCurrentAccount,
   useSuiClientQuery,
+  useSignAndExecuteTransaction,
 } from "@mysten/dapp-kit";
+import { Transaction } from "@mysten/sui/transactions";
+import { useQueryClient } from "@tanstack/react-query";
+import { useNetworkVariable } from "../providers";
 
-const TOKI_TYPE =
-  "0x2c736572e40614b1bd409d344a362eb6d724e77eefc7cc6517873e110c899178::creature::Toki";
+const PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID;
+if (!PACKAGE_ID) {
+  throw new Error("NEXT_PUBLIC_PACKAGE_ID is not set in .env.local");
+}
+const TOKI_TYPE = `${PACKAGE_ID}::creature::Toki`;
 
 // pages/my-page.tsx (혹은 해당 파일 상단)
 import { useEffect, useState, useMemo } from "react";
-import { renderTokiPngDataURLFromU8 } from "@/utils/renderToki";
+import { renderTokiPngDataURLFromU8, PARTS_CATALOG } from "@/utils/renderToki";
 
 // 체인에서 내려오는 phenotype 뷰 타입(ear/eye/mouth만 있다고 가정)
 type PhenotypeView = {
@@ -106,6 +113,14 @@ function TokiPreview({
   );
 }
 
+// Helper to convert SUI string to MIST BigInt
+function suiToMist(sui: string): bigint {
+  if (!sui.trim()) return 0n;
+  const [integer, fraction = ""] = sui.split(".");
+  // Ensure fraction part is not longer than 9 digits and pad with zeros if shorter
+  const paddedFraction = fraction.padEnd(9, "0").slice(0, 9);
+  return BigInt(integer + paddedFraction);
+}
 // 토키 상세 정보 모달
 function TokiDetailModal({
   toki,
@@ -114,13 +129,97 @@ function TokiDetailModal({
   toki: TokiView;
   onClose: () => void;
 }) {
+  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const queryClient = useQueryClient();
+  const packageId = useNetworkVariable("packageId");
+  const farmId = useNetworkVariable("farmId");
+
+  const [price, setPrice] = useState("");
+  const [fee, setFee] = useState(""); // 수수료 입력 필드 (요청사항)
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleRegister = async () => {
+    const priceValue = price.trim();
+    const feeValue = fee.trim();
+
+    if (priceValue && (isNaN(Number(priceValue)) || Number(priceValue) <= 0)) {
+      setError("If provided, price must be a valid positive number.");
+      return;
+    }
+    // fee는 스마트 컨트랙트의 register 함수에 따라 필수입니다.
+    if (!feeValue || isNaN(Number(feeValue)) || Number(feeValue) < 0) {
+      setError("Please enter a valid, non-negative fee.");
+      return;
+    }
+    if (!packageId || !farmId) {
+      setError("Package or Farm ID not found in network config.");
+      return;
+    }
+
+    setIsRegistering(true);
+    setError(null);
+
+    try {
+      const tx = new Transaction();
+      const priceInMist = priceValue ? suiToMist(priceValue) : null;
+      const geneInfo = JSON.stringify(toki.phenotype ?? {});
+
+      tx.moveCall({
+        target: `${packageId}::farm::register`,
+        arguments: [
+          tx.object(farmId),
+          tx.object(toki.id),
+          tx.pure.u8(Number(feeValue)),
+          tx.pure.option("u64", priceInMist),
+          tx.pure.string(geneInfo),
+        ],
+      });
+
+      const result = await signAndExecute({ transaction: tx });
+
+      console.log("Registration successful:", result);
+      // MyPage와 FarmPage의 데이터를 새로고침하기 위해 쿼리를 무효화합니다.
+      await queryClient.invalidateQueries({ queryKey: ["getOwnedObjects"] });
+      await queryClient.invalidateQueries({ queryKey: ["getDynamicFields"] });
+      onClose();
+    } catch (e: any) {
+      setError(e.message || "Registration failed.");
+    } finally {
+      setIsRegistering(false);
+    }
+  };
+
+  // 숫자 표현형을 영문 이름으로 변환합니다.
+  const resolvedPhenotype = useMemo(() => {
+    if (!toki.phenotype) return null;
+    const { base, ear, eye, mouth } = toki.phenotype;
+
+    const getPartName = (
+      partType: keyof typeof PARTS_CATALOG,
+      index: number
+    ) => {
+      const fileName = PARTS_CATALOG[partType]?.[index] ?? "N/A";
+      if (fileName === "N/A") return "N/A";
+      // "ears_long.png" -> "long"
+      return fileName.replace(`${partType}_`, "").replace(".png", "");
+    };
+
+    return {
+      Base: getPartName("base", base),
+      Ears: getPartName("ears", ear),
+      Eyes: getPartName("eyes", eye),
+      Mouth: getPartName("mouth", mouth),
+    };
+  }, [toki.phenotype]);
+
   return (
     <div
       className="fixed inset-0 z-20 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-sm rounded-2xl bg-white p-4 shadow-lg"
+        className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-lg"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="aspect-square w-full">
@@ -130,40 +229,109 @@ function TokiDetailModal({
               alt={toki.id}
               width={320}
               height={320}
-              className="h-auto w-full rounded-lg object-cover"
+              className="h-auto w-full rounded-lg object-contain"
             />
           ) : (
             <TokiPreview phenotype={toki.phenotype} size={320} />
           )}
         </div>
         <div className="p-2">
-          <h3 className="mb-3 text-xl font-bold text-emerald-900">
+          <h3 className="mb-4 text-4xl font-bold text-emerald-900">
             {toki.name ?? `Toki #${toki.id.slice(0, 6)}`}
           </h3>
-          <div className="space-y-2 text-sm">
+          {/* NFT 정보 섹션 */}
+          <div className="mb-4 grid grid-cols-2 gap-x-4 gap-y-3 text-lg">
             <div>
-              <div className="font-semibold text-gray-500">ID</div>
-              <p className="break-all text-gray-800">{toki.id}</p>
+              <div className="font-semibold text-gray-800">ID</div>
+              <p className="break-all text-base text-black">{toki.id}</p>
             </div>
             <div>
-              <div className="font-semibold text-gray-500">Parent A</div>
-              <p className="break-all text-gray-800">{toki.parentA ?? "-"}</p>
+              <div className="font-semibold text-gray-800">Phenotype</div>
+              {resolvedPhenotype && (
+                <div className="grid grid-cols-2 text-black">
+                  {Object.entries(resolvedPhenotype).map(([key, value]) => (
+                    <div key={key}>
+                      {key}: {value.replace(/_/g, " ")}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             <div>
-              <div className="font-semibold text-gray-500">Parent B</div>
-              <p className="break-all text-gray-800">{toki.parentB ?? "-"}</p>
+              <div className="font-semibold text-gray-800">Parent A</div>
+              <p className="break-all text-base text-black">
+                {toki.parentA ?? "-"}
+              </p>
             </div>
-            {toki.phenotype && (
-              <div className="rounded-lg bg-emerald-50 p-2 text-emerald-900">
-                <div className="font-medium mb-1">Phenotype</div>
-                <div className="grid grid-cols-4 gap-1 text-center">
-                  <div>Base: {toki.phenotype.base}</div>
-                  <div>Ear: {toki.phenotype.ear}</div>
-                  <div>Eye: {toki.phenotype.eye}</div>
-                  <div>Mouth: {toki.phenotype.mouth}</div>
+            <div>
+              <div className="font-semibold text-gray-800">Parent B</div>
+              <p className="break-all text-base text-black">
+                {toki.parentB ?? "-"}
+              </p>
+            </div>
+          </div>
+
+          {/* NFT 등록 폼 섹션 */}
+          <div className="mt-4 border-t pt-4">
+            <h4 className="mb-2 text-2xl font-semibold text-gray-800">
+              Register for Sale
+            </h4>
+            <div className="space-y-3">
+              <div>
+                <label
+                  htmlFor="price"
+                  className="block text-lg font-medium text-black"
+                >
+                  Price - Optional
+                </label>
+                <div className="relative mt-1 rounded-md shadow-sm">
+                  <input
+                    type="number"
+                    id="price"
+                    value={price}
+                    onChange={(e) => setPrice(e.target.value)}
+                    className="block w-full rounded-md border-gray-300 pr-12 focus:border-emerald-500 focus:ring-emerald-500 sm:text-lg font-bold text-emerald-800 placeholder:text-red-500"
+                    placeholder="Leave empty if not for sale."
+                  />
+                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
+                    <span className="text-gray-800 sm:text-lg">SUI</span>
+                  </div>
                 </div>
               </div>
-            )}
+              <div>
+                <label
+                  htmlFor="fee"
+                  className="block text-lg font-medium text-black"
+                >
+                  Fee
+                </label>
+                <div className="relative mt-1 rounded-md shadow-sm">
+                  <input
+                    type="number"
+                    id="fee"
+                    value={fee}
+                    onChange={(e) => setFee(e.target.value)}
+                    className="block w-full rounded-md border-gray-300 focus:border-emerald-500 focus:ring-emerald-500 sm:text-lg font-bold text-emerald-800"
+                    placeholder="e.g., 10"
+                    aria-describedby="fee-description"
+                  />
+                </div>
+                <p
+                  className="mt-1 text-base text-gray-800"
+                  id="fee-description"
+                >
+                  A fee for registering the Toki.
+                </p>
+              </div>
+            </div>
+            {error && <p className="mt-2 text-lg text-red-600">{error}</p>}
+            <button
+              onClick={handleRegister}
+              disabled={isRegistering || !fee}
+              className="mt-4 w-full rounded-lg bg-emerald-600 px-5 py-3 text-xl font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-emerald-300"
+            >
+              {isRegistering ? "Registering..." : "Register"}
+            </button>
           </div>
         </div>
       </div>
@@ -201,7 +369,7 @@ export default function MyPage() {
   const { data, isLoading, isError } = useSuiClientQuery(
     "getOwnedObjects",
     {
-      owner: account?.address!,
+      owner: account?.address,
       filter: { StructType: TOKI_TYPE },
       options: { showType: true, showContent: true, showDisplay: true },
     },

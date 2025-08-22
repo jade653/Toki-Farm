@@ -10,15 +10,14 @@ import { getFullnodeUrl } from "@mysten/sui/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 
-// 네트워크 & 패키지ID(예시) - 실제 값은 .env.local 에서 주입 추천
+// 네트워크 설정. .env.local의 변수들을 사용합니다.
 const { networkConfig, useNetworkVariable } = createNetworkConfig({
   testnet: {
     url: getFullnodeUrl("testnet"),
-    variables: { packageId: process.env.NEXT_PUBLIC_PACKAGE_TESTNET! },
-  },
-  mainnet: {
-    url: getFullnodeUrl("mainnet"),
-    variables: { packageId: process.env.NEXT_PUBLIC_PACKAGE_MAINNET! },
+    variables: {
+      packageId: process.env.NEXT_PUBLIC_PACKAGE_ID!,
+      farmId: process.env.NEXT_PUBLIC_FARM_ID!,
+    },
   },
 });
 
